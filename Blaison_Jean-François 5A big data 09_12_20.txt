@@ -1,0 +1,123 @@
+Cours du 09/12/2020
+
+
+4 types de mémoire :
+1. Mémoire cache (en Ko)
+2. Mémoire vive (en Go)
+3. Disque (SSD) --> flash
+4. CD, clé USB ...
+
+
+Architecture tolérante aux pannes:
+ReplicaSet
+
+Sauvegardes régulières :
+
+1. Disponibilité : en cas de panne d'un serveur (noeud), la tâche effectuée par ce serveur peut être par un autre serveur (noeud)
+
+2. Scalabilité : adaptation au changement
+
+
+Théorème CAP
+C : Cohérence : tous les nœuds du système voient exactement les mêmes données au même moment ;
+A : Available (données) : garantie que toutes les requêtes reçoivent une réponse;
+P : Tolérance au partitionnement : aucune panne moins importante qu'une coupure totale du réseau ne doit empêcher le système de répondre correctement 
+
+
+Les étapes pour instancier une réplication:
+1. Nom de ReplicaSet (rs1)
+2. Utiliser un port d'écoute pour chaque serveur (27018, 27019, 27020)
+
+Exemple pour lancer les serveurs
+mongod --replSet rsJeff --port 27018 --dbpath rs1
+
+
+
+--------- Mise en place d'une Architecture tolérante aux pannes avec MongoDB ---------------
+
+Pour la mettre en place on procède de la façon suivante:
+
+1. On définit un répertoire de sauvegarde pour chacun des serveurs, 
+nous avons ici trois serveurs que l'on appelle rs1, rs2, rs3 
+dont les ports d'écoute sont respectivement 27018, 27019, 27020
+
+On met ensuite en écoute les serveurs :
+2.Une fois les répertoires définis, on lance trois serveurs comme suit :
+¤ mongod --replSet rsJeff --port 27018 --dbpath rs1
+¤ mongod --replSet rsJeff --port 27019 --dbpath rs2
+¤ mongod --replSet rsJeff --port 27020 --dbpath rs3
+
+Ils appartiennent maintenant au même replicat rsJeff 
+
+On s'y connecte depuis un autre invit de commande
+¤ mongo --port 27018
+On accede aux infos et défini 20718 en primaire:
+> rs.initiate();
+On remarque que l'on est sur le Secondary
+Permet de renvoyer un identifiant qui renvoie les informations sur l'hôte, son port d'écoute
+> rsJeff:SECONDARY> rs.conf();
+Nous sommes maintenant connecté sur le Primary
+On peut ensuite ajouter le serveur en 27020
+> rsJeff:PRIMARY> rs.add("local:27019");
+Il nous dit qu'il connait et que c'est 1 des 2 serveurs
+On ajoute le dernier :
+> rsJeff:PRIMARY> rs.add("local:27020");
+Il dit maintenant qu'il en a trouvé 2 des 3 serveurs 
+(le dernier est le rs1 qu'il connait déjà)
+On est donc sûr que maintenant nos serveurs sont reconnus
+On vérifie l'état des serveurs:
+> rsJeff:PRIMARY> rs.status();
+
+
+Insérer un arbitre:
+creer dossier arb puis on lance un serveur avec le path arb et sur le port 30000
+¤ mongod --port 30000 --dbpath arb
+> rsJeff:SECONDARY> rs.addArb("local:30000");
+
+
+Que signifie le C du théorème CAP ?
+// Vrai 1. Un client récupère systématiquement la dernière version d'un document
+// Faux 2. une transaction ne verra pas les mises à jour des autre transactions qui ne  osnt pas encore validées
+// Faux 3. Il y a un ordre préservé des lectures et écritures
+La réponse est 1.
+
+
+
+Si vous avez du temps:
+Decrire les étapes à suivre pour le Sharding :
+
+Etape 1:
+On lance le serveur de configuration dans le jeu de réplicas 
+et on active la réplication entre eux :
+¤ mongod --configsvr --port 27019 --replSet rs0 --dbpath rs2 --bind_ip local
+¤ mongod --configsvr --port 27020 --replSet rs0 --dbpath rs3 --bind_ip local
+
+Etape 2:
+On initialise maintenant les réplicas sur le serveur de configuration
+> rs.initiate( { _id : "rs0",  configsvr: true,  members: [   { _id: 0, host: "IP:27018" },   { _id: 1, host: "IP:27019" },   { _id: 2, host: "IP:27020" }    ] })
+
+Etape 3:
+On joint le serveur de partitionnement dans les replicas et on active la réplication entre eux.
+¤ mongod --shardsvr --port 27030 --replSet rsJeff --dbpath rs4 --bind_ip local
+¤ mongod --shardsvr --port 27031 --replSet rsJeff --dbpath rs5 --bind_ip local
+
+Etape 4:
+On initialise le jeu de réplicas sur un des serveur:
+> rs.initiate( { _id : "rs0",  members: [   { _id: 0, host: "IP:27030" },   { _id: 1, host: "IP:27031" }    ] })
+
+Etape 5:
+On démarre mongos pour le cluster:
+¤ mongos --port 40000 --configdb rs0/local:27018,localhost:27019, localhost:27020
+
+Etape 6:
+On démarre le serveur et on ajoute ensuite d'autres serveurs
+¤ mongo --port 40000
+¤ sh.addShard( "rs1/localhost:27030,localhost:27031")
+
+Etape 7:
+On active le partitionnementsur la BDD, la clé est requise
+¤ sh.enableSharding("ExBDD")
+¤ sh.shardCollection("dbName.collectionName", { "key" : 1 } )
+
+
+Le replicaSet est pour la haute disponibilité et le sharding est pour le passage à l'échelle(la montée en charge)
